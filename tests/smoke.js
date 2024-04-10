@@ -120,9 +120,9 @@ async function main(event) {
         let url = new URL(event.request.url);
         if (url.pathname === "/") {
             console.log(`chaining from ${url} to /chained`);
-            let response = await fetch("/chained");
+            let response = await fetch("/chained", event.request);
             let body = await response.text();
-            resolve(new Response(body));
+            resolve(new Response(body, {headers: response.headers}));
             return;
         }
 
