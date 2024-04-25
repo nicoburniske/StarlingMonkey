@@ -450,6 +450,7 @@ bool RequestOrResponse::append_body(JSContext *cx, JS::HandleObject self, JS::Ha
     return false;
   }
 
+  // MARKING BODY AS USED.
   mozilla::DebugOnly<bool> success = mark_body_used(cx, source);
   MOZ_ASSERT(success);
   if (body_stream(source) != body_stream(self)) {
@@ -743,6 +744,7 @@ bool RequestOrResponse::consume_content_stream_for_bodyAll(JSContext *cx, JS::Ha
   }
   MOZ_ASSERT(JS::IsReadableStream(stream));
   if (RequestOrResponse::body_unusable(cx, stream)) {
+    fprintf(stderr, "The ReadableStream body can't be consumed: consume_content_stream_for_bodyAll \n");
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                               JSMSG_RESPONSE_BODY_DISTURBED_OR_LOCKED);
     JS::RootedObject result_promise(cx);
@@ -831,9 +833,17 @@ bool RequestOrResponse::bodyAll(JSContext *cx, JS::CallArgs args, JS::HandleObje
     return true;
   }
 
-  if (!mark_body_used(cx, self)) {
-    return ReturnPromiseRejectedWithPendingError(cx, args);
-  }
+  // TODO: Why is this here? 
+  // Should this not be a read only check? 
+  // We haven't used the body yet, so we can't mark it as used???
+  //   if (!mark_body_used(cx, self)) {
+  //   return ReturnPromiseRejectedWithPendingError(cx, args);
+  // }
+
+  // This complains with: guest never invoked `response-outparam::set` method
+  // if (RequestOrResponse::body_unusable(cx, self)) {
+  //   return ReturnPromiseRejectedWithPendingError(cx, args);
+  // }
 
   JS::RootedValue body_parser(cx, JS::PrivateValue((void *)parse_body<result_type>));
 
@@ -850,6 +860,7 @@ bool RequestOrResponse::bodyAll(JSContext *cx, JS::CallArgs args, JS::HandleObje
   }
 
   JS::RootedValue extra(cx, JS::ObjectValue(*stream));
+  // Stream is already used at this point...
   if (!enqueue_internal_method<consume_content_stream_for_bodyAll>(cx, self, extra)) {
     return ReturnPromiseRejectedWithPendingError(cx, args);
   }
@@ -1024,21 +1035,29 @@ bool RequestOrResponse::body_reader_catch_handler(JSContext *cx, JS::HandleObjec
 
 bool RequestOrResponse::maybe_stream_body(JSContext *cx, JS::HandleObject body_owner,
                                           bool *requires_streaming) {
+  fprintf(stderr, "Checking if body is streamable.\n");
   if (is_incoming(body_owner) && has_body(body_owner)) {
     *requires_streaming = true;
     return true;
   }
 
+  fprintf(stderr, "Body is not incoming.\n");
   JS::RootedObject stream(cx, body_stream(body_owner));
   if (!stream) {
+    // We are exiting here... does this consume the body stream? 
     return true;
   }
 
+  fprintf(stderr, "Body stream is null.\n");
   if (body_unusable(cx, stream)) {
+    // Error is likely coming from here.
+    fprintf(stderr, "Error: body ReadableStream has already been read from or canceled.");
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                               JSMSG_RESPONSE_BODY_DISTURBED_OR_LOCKED);
     return false;
   }
+
+  fprintf(stderr, "Body is usable.\n");
 
   if (streams::TransformStream::is_ts_readable(cx, stream)) {
     JSObject *ts = streams::TransformStream::ts_from_readable(cx, stream);
