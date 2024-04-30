@@ -278,6 +278,7 @@ bool RequestOrResponse::mark_body_used(JSContext *cx, JS::HandleObject obj) {
   JS::RootedObject stream(cx, body_stream(obj));
   if (stream && streams::NativeStreamSource::stream_is_body(cx, stream)) {
     RootedObject source(cx, streams::NativeStreamSource::get_stream_source(cx, stream));
+    // What is this doing? 
     if (streams::NativeStreamSource::piped_to_transform_stream(source)) {
       return true;
     }
@@ -318,6 +319,13 @@ bool RequestOrResponse::body_unusable(JSContext *cx, JS::HandleObject body) {
   MOZ_RELEASE_ASSERT(JS::ReadableStreamIsDisturbed(cx, body, &disturbed) &&
                      JS::ReadableStreamIsLocked(cx, body, &locked));
   return disturbed || locked;
+}
+
+bool RequestOrResponse::body_disturbed(JSContext *cx, JS::HandleObject body) {
+  MOZ_ASSERT(JS::IsReadableStream(body));
+  bool disturbed;
+  MOZ_RELEASE_ASSERT(JS::ReadableStreamIsDisturbed(cx, body, &disturbed));
+  return disturbed ;
 }
 
 /**
@@ -743,7 +751,9 @@ bool RequestOrResponse::consume_content_stream_for_bodyAll(JSContext *cx, JS::Ha
     return false;
   }
   MOZ_ASSERT(JS::IsReadableStream(stream));
-  if (RequestOrResponse::body_unusable(cx, stream)) {
+  // Really only need to check if it is disturbed. 
+  if (RequestOrResponse::body_disturbed(cx, stream)) {
+    // If locked and we have an existing reader???
     fprintf(stderr, "The ReadableStream body can't be consumed: consume_content_stream_for_bodyAll \n");
     JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                               JSMSG_RESPONSE_BODY_DISTURBED_OR_LOCKED);
@@ -752,10 +762,27 @@ bool RequestOrResponse::consume_content_stream_for_bodyAll(JSContext *cx, JS::Ha
         &JS::GetReservedSlot(self, static_cast<uint32_t>(Slots::BodyAllPromise)).toObject();
     JS::SetReservedSlot(self, static_cast<uint32_t>(Slots::BodyAllPromise), JS::UndefinedValue());
     return RejectPromiseWithPendingError(cx, result_promise);
+  } else {
+    printf("The ReadableStream body is not disturbed: consume_content_stream_for_bodyAll \n");
   }
-  JS::Rooted<JSObject *> unwrappedReader(
-      cx, JS::ReadableStreamGetReader(cx, stream, JS::ReadableStreamReaderMode::Default));
+  // Is this using previously created reader? 
+  // We are creating one in mark_body_used.
+  // builtins::web::streams::NativeStreamSource::Slots::InternalReader
+  // JS::Rooted<JSObject *> unwrappedReader(JS::GetReservedSlot(self, static_cast<uint32_t>(builtins::web::streams::NativeStreamSource::Slots::InternalReader).toObjectOrNull()));
+
+  // Does this get the previously created reader?
+  // unwrapped reader vs wrapped reader? 
+
+  // JS::RootedObject source(cx, builtins::web::streams::NativeStreamSource::get_stream_source(cx, stream));
+  
+  
+  JS::RootedObject unwrappedReader(cx, streams::NativeStreamSource::get_locked_by_internal_reader(cx, stream));
+
+  // JS::Rooted<JSObject *> unwrappedReader(
+  //     cx, JS::ReadableStreamGetReader(cx, stream, JS::ReadableStreamReaderMode::Default));
+
   if (!unwrappedReader) {
+    fprintf(stderr, "Unwrapped reader not found\n");
     return false;
   }
 
@@ -836,9 +863,10 @@ bool RequestOrResponse::bodyAll(JSContext *cx, JS::CallArgs args, JS::HandleObje
   // TODO: Why is this here? 
   // Should this not be a read only check? 
   // We haven't used the body yet, so we can't mark it as used???
-  //   if (!mark_body_used(cx, self)) {
-  //   return ReturnPromiseRejectedWithPendingError(cx, args);
-  // }
+  // Probably only needs to be used for outgoing request.
+  if (!mark_body_used(cx, self)) {
+    return ReturnPromiseRejectedWithPendingError(cx, args);
+  }
 
   // This complains with: guest never invoked `response-outparam::set` method
   // if (RequestOrResponse::body_unusable(cx, self)) {

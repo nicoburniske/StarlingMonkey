@@ -9,7 +9,7 @@ async function main(event) {
         for (let [key, value] of response.headers.entries()) {
             console.log([key, value]);
         }
-        console.log("RESPONSE", response);
+        console.log("RESPONSE headers logged");
         // This throws an error.
         let text = await response.json();
         console.log("Successfully retrieved response body\n", JSON.stringify(text));
